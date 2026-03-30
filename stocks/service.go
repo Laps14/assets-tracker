@@ -2,11 +2,11 @@ package stocks
 
 import (
 	"context"
-	"net/http"
+	"fmt"
 )
 
 type UseCase interface {
-	Create(context.Context, string, string, Sector, float32, float32) (*Stock, err)
+	Create(context.Context, string, string, Sector, float32, float32) (*Stock, error)
 	Update(context.Context, string, string, Sector, float32, float32) error
 	Delete(context.Context, uint64) error
 	Get(context.Context, uint64) (*Stock, error)
@@ -19,17 +19,17 @@ type Service struct {
 
 func NewService(r Repository) *Service {
 	return &Service{
-		Repo: r
+		Repo: r,
 	}
 }
 
-func (s *Service) Create(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float32) (*Stock, err) {
+func (s *Service) Create(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float32) (*Stock, error) {
 	stock := Stock{
-		Title: title
-		Description: description
-		Sect: sector
-		TotalSupply: total_supply
-		StockVal: stock_val
+		Title: title,
+		Description: description,
+		Sect: sector,
+		TotalSupply: total_supply,
+		StockVal: stock_val,
 	}
 
 	id, err := s.Repo.Insert(ctx, &stock)
@@ -46,11 +46,11 @@ func (s *Service) Create(ctx context.Context, title, description string, sector 
 
 func (s *Service) Update(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float32) error {
 	stock := Stock{
-		Title: title
-		Description: description
-		Sect: sector
-		TotalSupply: total_supply
-		StockVal: stock_val
+		Title: title,
+		Description: description,
+		Sect: sector,
+		TotalSupply: total_supply,
+		StockVal: stock_val,
 	}
 
 	err := s.Repo.Update(ctx, &stock)
@@ -82,7 +82,7 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Stock, error) {
 		return nil, err
 	}
 
-	return &stock, nil
+	return stock, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]*Stock, error) {
@@ -93,5 +93,5 @@ func (s *Service) List(ctx context.Context) ([]*Stock, error) {
 		return nil, err
 	}
 
-	return &stocks, nil
+	return stocks, nil
 }
