@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"github.com/Laps14/assets-tracker/config"
+	"github.com/Laps14/assets-tracker/internal/http/brapi"
 	"github.com/Laps14/assets-tracker/tty"
 	"golang.org/x/sys/unix"
 	"strings"
@@ -36,23 +37,29 @@ func main() {
 		panic(1)
 	}
 
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		unix.SIGINT, unix.SIGQUIT, unix.SIGHUP,
-	)
-	defer stop()
+	ctx := context.Background()
+	mainSignals := make(chan os.Signal)
+
+	term.ShutdownTtyRoutine(mainSignals) // Shutdown goroutine
 
 	conf.CheckDirectories(ctx, term)
 
-	term.ShutdownTtyPrompt(ctx)
+	ctx = brapi.NewContext(ctx, conf.AccessToken)
+
+	brapi.NewBrapiClient(ctx)
+
+	// Every command calls signal.Reset because it will be able
+	// to cancel itself without quitting the tracker.
+	// After the execution of a command, the main will be able
+	// to receive signals again.
 
 	for {
-		getCmd()
+		getCmd(ctx)
+		signal.Notify(mainSignals, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
 	}
 }
 
-func getCmd() {
-	// fmt.Print("\x1b[1m\u21D2 \x1b[0m")
+func getCmd(ctx context.Context) {
 	fmt.Print("\x1b[1m\u276F\u276F \x1b[0m")
 
 	buf := bufio.NewReader(os.Stdin)
@@ -70,7 +77,11 @@ func getCmd() {
 	case "w", "write":
 		return
 	case "l", "list":
-		return
+		c := brapi.GetStocks(ctx)
+
+		for i := range c {
+			fmt.Println(i)
+		}
 	case "h", "help":
 		templ, err := template.New("help").Parse(help_templ)
 		

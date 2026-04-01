@@ -1,9 +1,11 @@
 package tty
 
 import (
-	"context"
+	// "context"
 	"golang.org/x/sys/unix"
 	"fmt"
+	"os"
+	"os/signal"
 )
 
 type Tty struct {
@@ -57,9 +59,11 @@ func (tty *Tty) InitialTtyPrompt() {
 	tty.MoveCurPos(tty.ws.Row, 0)
 }
 
-func (tty *Tty) ShutdownTtyPrompt(ctx context.Context) {
+func (tty *Tty) ShutdownTtyRoutine(c chan os.Signal) {
+	signal.Notify(c, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
+
 	go func() {
-		<-ctx.Done()
+		<-c
 
 		fmt.Print(DALT_SCREEN_BUFF)
 		unix.Exit(0)

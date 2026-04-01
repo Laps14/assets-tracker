@@ -26,6 +26,7 @@ type Config struct {
 	TrackerConfDir string
 	TrackedAssets string
 	ClientConf string
+	AccessToken string
 }
 
 func InitializeConfig() (*Config, error) {
@@ -77,6 +78,10 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 	}
 	defer tracked_assets.Close()
 
+	// Checks if the client.conf file exists. If not, creates it
+	// and ask for the user access token to save it and use
+	// for requests later.
+	
 	client_conf, err := os.Open(c.ClientConf)
 
 	if err != nil {
@@ -90,9 +95,13 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 			client_conf.Chmod(REGULAR_USER_PERM)
 
 			c.askForAccessToken(ctx, client_conf, term)
+			return
 		}
 	}
 	defer client_conf.Close()
+
+	// If client.conf already exists, traverse through it
+	// and assigns the save token to the Config struct
 
 	conf_reader := bufio.NewScanner(client_conf)
 
@@ -103,7 +112,11 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 
 		key_val := strings.Split(config_line, "=")
 
-		if key_val[0] == "ACCESS_TOKEN" { break }
+		if key_val[0] == "ACCESS_TOKEN" {
+			if len(key_val[1]) > 0 {
+				c.AccessToken = key_val[1]
+			}
+		}
 	}
 }
 
@@ -111,7 +124,6 @@ func (c *Config) askForAccessToken(ctx context.Context, f *os.File, term *tty.Tt
 	go func() {
 		<-ctx.Done()
 		term.EnableEcho()
-		term.ShutdownTtyPrompt(ctx)
 	}()
 
 	var access_token string
@@ -138,4 +150,6 @@ func (c *Config) askForAccessToken(ctx context.Context, f *os.File, term *tty.Tt
 		c.askForAccessToken(ctx, f, term)
 		return
 	}
+
+	c.AccessToken = access_token
 }
