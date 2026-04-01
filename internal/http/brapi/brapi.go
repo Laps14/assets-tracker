@@ -2,14 +2,12 @@ package brapi
 
 import (
 	"context"
+	// "encoding/json"
 	"fmt"
-	// "github.com/Laps14/assets-tracker/config"
+	"golang.org/x/sys/unix"
 	"net/http"
-	"encoding/json"
-	"os"
 	"os/signal"
 	"time"
-	"golang.org/x/sys/unix"
 )
 
 type token string
@@ -29,9 +27,7 @@ func NewBrapiClient(ctx context.Context) {
 	}
 }
 
-func GetStocks(ctx context.Context) <-chan bool{
-	c := make(chan bool)
-
+func GetStocks(ctx context.Context) (context.Context, <-chan bool) {
 	signal.Reset()
 
 	ctx, stop := signal.NotifyContext(
@@ -47,91 +43,23 @@ func GetStocks(ctx context.Context) <-chan bool{
 
 	req.Header = header
 
-	go func() {
+	finished := make(chan bool)
+
+	go func(f chan bool) {
 		defer stop()
-		for _, ok := <-ctx.Done(); !ok; _, ok = <-ctx.Done() {
-			resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req)
+		defer resp.Body.Close()
 
-			time.Sleep(5 * time.Second)
-
-			if err != nil {
-				fmt.Errorf("ERROR: %v", err)
-				c <- false
-				return
-			}
-
-			body := json.NewDecoder(resp.Body)
-
-			logfile, err := os.Create("/home/lucas/.assets-tracker/logfile.json")
-
-			if err != nil {
-				fmt.Errorf("ERROR: %v", err)
-				c <- false
-				return
-			}
-
-			for {
-
-				var v map[string]interface{}
-
-				if err := body.Decode(&v); err != nil {
-					fmt.Errorf("ERROR: %v", err)
-					break
-				}
-
-				for k, vv := range v {
-					fmt.Fprintf(logfile, "%v -> %v\n", k, vv)
-				}
-			}
-			defer resp.Body.Close()
-
-			c <- true
+		if err != nil {
+			fmt.Errorf("ERROR: %v", err)
 			return
 		}
-		// select {
-		// case <-ctx.Done():
-		// 	for i := 0; i < 10; i++ {
-		// 		fmt.Println("SIGNAL")
-		// 	}
-		// 	c <- false
-		// default:
-		//
-		// 	resp, err := http.DefaultClient.Do(req)
-		//
-		// 	time.Sleep(5 * time.Second)
-		//
-		// 	if err != nil {
-		// 		fmt.Errorf("ERROR: %v", err)
-		// 		c <- false
-		// 	}
-		//
-		// 	body := json.NewDecoder(resp.Body)
-		//
-		// 	logfile, err := os.Create("/home/lucas/.assets-tracker/logfile.json")
-		//
-		// 	if err != nil {
-		// 		fmt.Errorf("ERROR: %v", err)
-		// 		c <- false
-		// 	}
-		//
-		// 	for {
-		//
-		// 		var v map[string]interface{}
-		//
-		// 		if err := body.Decode(&v); err != nil {
-		// 			fmt.Errorf("ERROR: %v", err)
-		// 			break
-		// 		}
-		//
-		// 		for k, vv := range v {
-		// 			fmt.Fprintf(logfile, "%v -> %v\n", k, vv)
-		// 		}
-		// 	}
-		// 	defer resp.Body.Close()
-		//
-		// 	c <- true
-		// }
-	}()
 
-	return c
+		for i := 0; i < 10; i++ {
+			time.Sleep(1 * time.Second)
+			f <- true
+		}
+	}(finished)
+
+	return ctx, finished
 }

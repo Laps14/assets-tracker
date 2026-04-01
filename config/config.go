@@ -106,7 +106,11 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 	conf_reader := bufio.NewScanner(client_conf)
 
 	for {
-		if !conf_reader.Scan() { break }
+		if !conf_reader.Scan() {
+			if len(c.AccessToken) == 0 {
+				c.askForAccessToken(ctx, client_conf, term)
+			}
+		}
 
 		config_line := conf_reader.Text()
 
@@ -115,6 +119,7 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 		if key_val[0] == "ACCESS_TOKEN" {
 			if len(key_val[1]) > 0 {
 				c.AccessToken = key_val[1]
+				return
 			}
 		}
 	}

@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"github.com/Laps14/assets-tracker/config"
 	"github.com/Laps14/assets-tracker/internal/http/brapi"
 	"github.com/Laps14/assets-tracker/tty"
 	"golang.org/x/sys/unix"
+	"os"
+	"os/signal"
 	"strings"
 	"text/template"
 )
@@ -48,8 +48,8 @@ func main() {
 
 	brapi.NewBrapiClient(ctx)
 
-	// Every command calls signal.Reset because it will be able
-	// to cancel itself without quitting the tracker.
+	// Some commands call signal.Reset because it will be able
+	// to cancel "itself" without quitting the tracker.
 	// After the execution of a command, the main will be able
 	// to receive signals again.
 
@@ -69,6 +69,8 @@ func getCmd(ctx context.Context) {
 	if err != nil {
 		fmt.Errorf("Error while reading the input")
 		panic(1)
+	} else if len(line) <= 1 {
+		return
 	}
 
 	args := strings.Fields(line)
@@ -77,11 +79,19 @@ func getCmd(ctx context.Context) {
 	case "w", "write":
 		return
 	case "l", "list":
-		c := brapi.GetStocks(ctx)
+		ctx, finished := brapi.GetStocks(ctx)
 
-		for i := range c {
-			fmt.Println(i)
+		for{
+			select {
+			case <-ctx.Done():
+				fmt.Errorf("- Ocorreu um erro durante a listagem de ações.")
+				return
+			case <-finished:
+				fmt.Println("FINISHED")
+			}
 		}
+
+		return
 	case "h", "help":
 		templ, err := template.New("help").Parse(help_templ)
 		

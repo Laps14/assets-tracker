@@ -55,6 +55,13 @@ func (tty *Tty) MoveCurPos(row, col uint16) {
 }
 
 func (tty *Tty) InitialTtyPrompt() {
+	tty.stdinTermios.Lflag &^= unix.ECHOCTL
+	err := unix.IoctlSetTermios(unix.Stdin, unix.TCSETS, tty.stdinTermios)
+
+	if err != nil {
+		panic(1)
+	}
+
 	tty.AlternateScreenBuffer()
 	tty.MoveCurPos(tty.ws.Row, 0)
 }
@@ -72,12 +79,10 @@ func (tty *Tty) ShutdownTtyRoutine(c chan os.Signal) {
 
 func (tty *Tty) EnableEcho() {
 	tty.stdinTermios.Lflag |= unix.ECHO
-	tty.stdoutTermios.Lflag |= unix.ECHO
-	unix.IoctlSetTermios(unix.Stdin, unix.TCSETS, tty.stdoutTermios)
+	unix.IoctlSetTermios(unix.Stdin, unix.TCSETS, tty.stdinTermios)
 }
 
 func (tty *Tty) DisableEcho() {
 	tty.stdinTermios.Lflag &^= unix.ECHO
-	tty.stdoutTermios.Lflag &^= unix.ECHO
-	unix.IoctlSetTermios(unix.Stdin, unix.TCSETS, tty.stdoutTermios)
+	unix.IoctlSetTermios(unix.Stdin, unix.TCSETS, tty.stdinTermios)
 }
