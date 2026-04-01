@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strings"
 	"text/template"
+	"time"
 )
 
 const (
@@ -21,6 +22,8 @@ const (
 		"\x1b[1mw, write STOCK [STOCK...]\x1b[0m\n\t Salva a(s) STOCK(s) para serem monitoradas.\n\n" +
 		"\x1b[1mSTOCK\x1b[0m\n\t O código/sigla de uma ação. Caso o tipo (3, 4, 5, 3F etc.) seja omitido, por padrão, a ação com indicador 4F será utilizada.\n\n"
 )
+
+var loading_chars = [...]string{"\u2819", "\u2838", "\u28B0", "\u28E0", "\u28C4", "\u2846", "\u2807"}
 
 func main() {
 	term, err := tty.NewTtyConfig()
@@ -54,12 +57,12 @@ func main() {
 	// to receive signals again.
 
 	for {
-		getCmd(ctx)
+		getCmd(ctx, term)
 		signal.Notify(mainSignals, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
 	}
 }
 
-func getCmd(ctx context.Context) {
+func getCmd(ctx context.Context, term *tty.Tty) {
 	fmt.Print("\x1b[1m\u276F\u276F \x1b[0m")
 
 	buf := bufio.NewReader(os.Stdin)
@@ -79,15 +82,23 @@ func getCmd(ctx context.Context) {
 	case "w", "write":
 		return
 	case "l", "list":
-		ctx, finished := brapi.GetStocks(ctx)
+		var ith_char int = 0
+
+		ctx, stockchan := brapi.GetStocks(ctx)
+
+		term.DisableCursor()
+		defer term.EnableCursor()
 
 		for{
 			select {
 			case <-ctx.Done():
-				fmt.Errorf("- Ocorreu um erro durante a listagem de ações.")
 				return
-			case <-finished:
-				fmt.Println("FINISHED")
+			case <-stockchan:
+				fmt.Printf("\x1b[2K\r")
+				fmt.Println("\nSTOCKCHAN\n")
+				return 
+			default:
+				loadingLine(&ith_char)
 			}
 		}
 
@@ -103,4 +114,11 @@ func getCmd(ctx context.Context) {
 	default:
 		fmt.Println("- Operação inválida")
 	}
+}
+
+func loadingLine(ith_char *int) {
+	if *ith_char >= len(loading_chars) { *ith_char = 0 }
+	time.Sleep(100 * time.Millisecond)
+	fmt.Printf("\rCarregando %s", loading_chars[*ith_char])
+	*ith_char++
 }

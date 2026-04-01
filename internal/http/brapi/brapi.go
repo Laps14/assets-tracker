@@ -2,12 +2,11 @@ package brapi
 
 import (
 	"context"
-	// "encoding/json"
+	"encoding/json"
 	"fmt"
 	"golang.org/x/sys/unix"
 	"net/http"
 	"os/signal"
-	"time"
 )
 
 type token string
@@ -43,9 +42,9 @@ func GetStocks(ctx context.Context) (context.Context, <-chan bool) {
 
 	req.Header = header
 
-	finished := make(chan bool)
+	stockchan := make(chan bool)
 
-	go func(f chan bool) {
+	go func(sc chan bool) {
 		defer stop()
 		resp, err := http.DefaultClient.Do(req)
 		defer resp.Body.Close()
@@ -55,11 +54,20 @@ func GetStocks(ctx context.Context) (context.Context, <-chan bool) {
 			return
 		}
 
-		for i := 0; i < 10; i++ {
-			time.Sleep(1 * time.Second)
-			f <- true
-		}
-	}(finished)
+		dec := json.NewDecoder(resp.Body)
 
-	return ctx, finished
+		for {
+			var v map[string]interface{}
+
+			if err := dec.Decode(&v); err != nil {
+				return
+			}
+
+			fmt.Printf("%#v\n", v)
+		}
+
+		sc <- true
+	}(stockchan)
+
+	return ctx, stockchan
 }
