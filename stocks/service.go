@@ -6,8 +6,8 @@ import (
 )
 
 type UseCase interface {
-	Create(context.Context, string, string, Sector, float32, float32) (*Stock, error)
-	Update(context.Context, string, string, Sector, float32, float32) error
+	Create(context.Context, string, string, Sector, float64, float64) (*Stock, error)
+	Update(context.Context, string, string, Sector, float64, float64) error
 	Delete(context.Context, uint64) error
 	Get(context.Context, uint64) (*Stock, error)
 	List(context.Context) ([]*Stock, error)
@@ -23,7 +23,7 @@ func NewService(r Repository) *Service {
 	}
 }
 
-func (s *Service) Create(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float32) (*Stock, error) {
+func (s *Service) Create(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float64) (*Stock, error) {
 	stock := Stock{
 		Title: title,
 		Description: description,
@@ -44,7 +44,7 @@ func (s *Service) Create(ctx context.Context, title, description string, sector 
 	return &stock, nil
 }
 
-func (s *Service) Update(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float32) error {
+func (s *Service) Update(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float64) error {
 	stock := Stock{
 		Title: title,
 		Description: description,

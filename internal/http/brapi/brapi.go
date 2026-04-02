@@ -7,12 +7,17 @@ import (
 	"golang.org/x/sys/unix"
 	"net/http"
 	"os/signal"
+	"github.com/Laps14/assets-tracker/stocks"
 )
 
 type token string
 var header http.Header
 var baseURL string
 var tkn = token("token")
+
+type stockRequest struct {
+	Stocks []map[string]interface{} `json:"stocks"`
+}
 
 func NewContext(ctx context.Context, t string) context.Context {
 	return context.WithValue(ctx, tkn, t)
@@ -26,7 +31,7 @@ func NewBrapiClient(ctx context.Context) {
 	}
 }
 
-func GetStocks(ctx context.Context) (context.Context, <-chan bool) {
+func GetStocks(ctx context.Context) (context.Context, <-chan []stocks.Stock) {
 	signal.Reset()
 
 	ctx, stop := signal.NotifyContext(
@@ -42,31 +47,32 @@ func GetStocks(ctx context.Context) (context.Context, <-chan bool) {
 
 	req.Header = header
 
-	stockchan := make(chan bool)
+	stockchan := make(chan []stocks.Stock)
 
-	go func(sc chan bool) {
+	go func(sc chan []stocks.Stock) {
 		defer stop()
 		resp, err := http.DefaultClient.Do(req)
 		defer resp.Body.Close()
 
 		if err != nil {
-			fmt.Errorf("ERROR: %v", err)
 			return
 		}
 
 		dec := json.NewDecoder(resp.Body)
+		stockSlice := make([]stocks.Stock, 0)
 
-		for {
-			var v map[string]interface{}
+		var jsonBody stockRequest
 
-			if err := dec.Decode(&v); err != nil {
-				return
-			}
-
-			fmt.Printf("%#v\n", v)
+		if err := dec.Decode(&jsonBody); err != nil {
+			fmt.Println("ERROR: ", err)
+			return
 		}
 
-		sc <- true
+		for _, v := range jsonBody.Stocks {
+			stockSlice = append(stockSlice, stocks.Stock{Title: v["stock"].(string), Description: v["name"].(string), StockVal: v["close"].(float64)})
+		}
+
+		sc <- stockSlice
 	}(stockchan)
 
 	return ctx, stockchan

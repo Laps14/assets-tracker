@@ -22,6 +22,9 @@ const (
 	DISABLE_SHOW_CURSOR = "\x1b[?25l"
 	ENABLE_BLINKING_CURSOR = "\x1b[?12h"
 	DISABLE_BLINKING_CURSOR = "\x1b[?12l"
+	SCROLL_REGION = "\x1b[%d;%dr"
+	ERASE_ENTIRE_SCREEN = "\x1b[2J"
+	ERASE_ENTIRE_LINE = "\x1b[2K"
 )
 
 func NewTtyConfig() (*Tty, error) {
@@ -59,15 +62,17 @@ func (tty *Tty) MoveCurPos(row, col uint16) {
 }
 
 func (tty *Tty) InitialTtyPrompt() {
-	tty.stdinTermios.Lflag &^= unix.ECHOCTL
+	tty.stdinTermios.Iflag &^= unix.IGNBRK | unix.BRKINT
+	tty.stdinTermios.Iflag |= unix.IUTF8 | unix.ECHOE
+	tty.stdinTermios.Lflag |= unix.IEXTEN
 	err := unix.IoctlSetTermios(unix.Stdin, unix.TCSETS, tty.stdinTermios)
 
 	if err != nil {
 		panic(1)
 	}
 
-	tty.AlternateScreenBuffer()
-	tty.EnableANSIMode()
+	unix.Write(unix.Stdout, []byte("\x1b[?1h"))
+	tty.ClearScreen()
 	tty.MoveCurPos(tty.ws.Row, 0)
 }
 
@@ -81,6 +86,10 @@ func (tty *Tty) ShutdownTtyRoutine(c chan os.Signal) {
 		tty.EnableEcho()
 		tty.EnableCursor()
 		tty.DisableANSIMode()
+		unix.Write(unix.Stdout, []byte("\x1b[?1h"))
+		unix.Write(unix.Stdout, []byte("\x1b[?67h"))
+		tty.EraseEntireLine()
+		tty.MoveCurPos(tty.ws.Row, 0)
 		unix.Exit(0)
 	}()
 }
@@ -145,4 +154,16 @@ func (tty *Tty) EnableCursor() {
 
 func (tty *Tty) DisableCursor() {
 	fmt.Printf(DISABLE_SHOW_CURSOR)
+}
+
+func (tty *Tty) SetScrollRegion(top, bottom uint16) {
+	fmt.Printf(SCROLL_REGION, top, bottom)
+}
+
+func (tty *Tty) ClearScreen() {
+	fmt.Printf(ERASE_ENTIRE_SCREEN)
+}
+
+func (tty *Tty) EraseEntireLine() {
+	fmt.Print(ERASE_ENTIRE_LINE)
 }

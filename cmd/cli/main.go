@@ -2,14 +2,18 @@ package main
 
 import (
 	"bufio"
+	// "bytes"
 	"context"
 	"fmt"
 	"github.com/Laps14/assets-tracker/config"
 	"github.com/Laps14/assets-tracker/internal/http/brapi"
+	"github.com/Laps14/assets-tracker/stocks"
 	"github.com/Laps14/assets-tracker/tty"
 	"golang.org/x/sys/unix"
+	// "math"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -92,13 +96,18 @@ func getCmd(ctx context.Context, term *tty.Tty) {
 		for{
 			select {
 			case <-ctx.Done():
-				return
-			case <-stockchan:
 				fmt.Printf("\x1b[2K\r")
-				fmt.Println("\nSTOCKCHAN\n")
+				return
+			case stockSlice, ok := <-stockchan:
+				if !ok {
+					fmt.Printf("\x1b[2K\r")
+					return
+				}
+				sortByStock(stockSlice)
+				print2Cols(stockSlice, term)
 				return 
 			default:
-				loadingLine(&ith_char)
+				loadingLine(&ith_char, term)
 			}
 		}
 
@@ -116,9 +125,45 @@ func getCmd(ctx context.Context, term *tty.Tty) {
 	}
 }
 
-func loadingLine(ith_char *int) {
+func loadingLine(ith_char *int, term *tty.Tty) {
+	var strBuilder strings.Builder
+
 	if *ith_char >= len(loading_chars) { *ith_char = 0 }
-	time.Sleep(100 * time.Millisecond)
-	fmt.Printf("\rCarregando %s", loading_chars[*ith_char])
+	fmt.Fprintf(&strBuilder, "Carregando %s", loading_chars[*ith_char])
+	fmt.Print(strBuilder.String())
+	time.Sleep(50 * time.Millisecond)
+	term.MoveCurPos(term.Rows(), 1)
 	*ith_char++
+}
+
+func sortByStock(stockSlice []stocks.Stock) {
+	sort.Slice(stockSlice, func(i, j int) bool {
+		return stockSlice[i].Title < stockSlice[j].Title
+	})
+}
+
+func print2Cols(stockSlice []stocks.Stock, term *tty.Tty) {
+
+	term.EraseEntireLine()
+	// left -> Left side of the Slice, excluding the first value
+	// because it was already printed.
+	// right -> Right side of the Slice
+	left, right := stockSlice[:(len(stockSlice) / 2)], stockSlice[len(stockSlice) / 2:]
+
+	var mostWideLine int = 0
+	var strBuilder strings.Builder
+
+	for _, stock := range left {
+		fmt.Fprintf(&strBuilder, "%s\t\t%s", stock.Title, stock.Description)
+		if strBuilder.Len() > mostWideLine { mostWideLine = strBuilder.Len() }
+		strBuilder.Reset()
+	}
+
+	for i, stock := range left {
+		term.MoveCurPos(term.Rows(), uint16(1))
+		fmt.Printf("%s\t\t%s", stock.Title, stock.Description)
+
+		term.MoveCurPos(term.Rows(), uint16(mostWideLine + 12))
+		fmt.Printf("|\t\t%s\t\t%s\n", right[i].Title, right[i].Description)
+	}
 }
