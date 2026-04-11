@@ -6,6 +6,7 @@ import (
 	// "errors"
 	"fmt"
 	"github.com/Laps14/assets-tracker/tty"
+	"github.com/Laps14/assets-tracker/notifications"
 	"os"
 	"strings"
 	// "io"
@@ -27,6 +28,8 @@ type Config struct {
 	TrackedAssets string
 	ClientConf string
 	AccessToken string
+	XDGSessionDesktop string
+	StockNotifier notifications.Notifier
 }
 
 func InitializeConfig() (*Config, error) {
@@ -43,6 +46,7 @@ func InitializeConfig() (*Config, error) {
 	c.TrackerConfDir = c.UserHomeDir + "/.assets-tracker/"
 	c.TrackedAssets = c.TrackerConfDir + "tracked-assets.conf"
 	c.ClientConf = c.TrackerConfDir + "client.conf"
+	c.selectDisplayServer()
 
 	return c, nil
 }
@@ -157,4 +161,24 @@ func (c *Config) askForAccessToken(ctx context.Context, f *os.File, term *tty.Tt
 	}
 
 	c.AccessToken = access_token
+}
+
+func (c *Config) selectDisplayServer() error {
+	val, ok := os.LookupEnv("XDG_SESSION_DESKTOP")
+	if !ok {
+		return fmt.Errorf("ERROR: XDG_SESSION_DESKTOP not set.\n")
+	}
+
+	if len(val) == 0 {
+		return fmt.Errorf("ERROR: There's no active desktop environment or compositor active.\n")
+	}
+
+	c.XDGSessionDesktop = val
+
+	switch strings.ToLower(val) {
+	case "cinnamon":
+		c.StockNotifier = notifications.NewLibNotifyNotifier()
+	}
+
+	return nil
 }
