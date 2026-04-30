@@ -28,7 +28,7 @@ const (
 		"\x1b[1ml, list\x1b[0m\n\t Lista todas as ações possíveis.\n\n" +
 		"\x1b[1m--tracked\x1b[0m\n\t Opção usada com list para listar apenas as ações monitoradas.\n\n" +
 		"\x1b[1mw, write STOCK [STOCK...]\x1b[0m\n\t Salva a(s) STOCK(s) para serem monitoradas. Para mais de uma ação, separá-las por espaço.\n\n" +
-		"\x1b[1mSTOCK\x1b[0m\n\t O código/sigla de uma ação. Caso o tipo (3, 4, 5, 3F etc.) seja omitido, por padrão, a ação com indicador 4F será utilizada.\n\n"
+		"\x1b[1mSTOCK\x1b[0m\n\t O código/sigla de uma ação. Caso o tipo (3, 4, 5, 3F etc.) seja omitido, por padrão, a ação com indicador 4F (ou 3F, caso haja) será utilizada.\n\n"
 )
 
 var loading_chars = [...]string{"\u2819", "\u2838", "\u28B0", "\u28E0", "\u28C4", "\u2846", "\u2807"}
@@ -104,7 +104,7 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 
 		// reg := regexp.MustCompile(`\b\w+\d{0,2}\w?\b[[:blank:]]\b\d+\b`)
 		// reg := regexp.MustCompile(`\b[A-Z]{4}\d*[F]?[[:blank:]]\d+[\d{1,2}|\%]?\b`)
-		reg := regexp.MustCompile(`\b[A-Z]{4}\d*[F]?[[:blank:]][\-\+]?\d+(?:\.\d{1,2})?(?:\%\B)?`)
+		reg := regexp.MustCompile(`\b[a-zA-Z]{4}(\d{0,2}|\d{0,2}[Ff])[[:blank:]][\-\+]?\d+(?:\.\d{1,2})?(?:\%\B)?`)
 
 		errs := slices.Compact(reg.Split(str, -1)) // Will take off repeated errors
 		blankSpaces_errs := strings.TrimSpace(strings.Join(errs, " ")) // Will trim annoying spaces and empty strings
@@ -119,7 +119,7 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 		}
 
 		for i, r := 0, args[1:]; i < len(r); i += 2 {
-			stock, err := s.Search(r[i])
+			stock, err := s.Search(strings.ToUpper(r[i]))
 
 			if err != nil {
 				fmt.Printf("ERROR: %v\n", err)
@@ -149,7 +149,7 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 				// Checks if the input line has any non-word char
 				// It can't be a simple \W because then the spaces
 				// would be interpreted as errors.
-				reg := regexp.MustCompile(`\b(?:[A-Z]{4}\d{0,2}[F]?)\s?`) 
+				reg := regexp.MustCompile(`\b[a-zA-Z]{4}(?:\d{0,2}|\d{1,2}[Ff])\b`) 
 
 				errs := slices.Compact(reg.Split(str, -1)) // Will take off repeated errors
 				blankSpaces_errs := strings.TrimSpace(strings.Join(errs, " ")) // Will trim annoying spaces and empty strings
@@ -298,7 +298,7 @@ func startTrackerNotifications(ctx context.Context, trackedStocks *map[string]st
 					if current >= below_target && current <= above_target {
 						// Send notification here
 						err = conf.StockNotifier.Notify(notifications.Notification{
-							TimeToExpire: 1e3,
+							TimeToExpire: 5e3,
 							StockTitle: stock.Title,
 							Body: fmt.Sprintf("%s acabou de bater %.2f. Abra agora seu homebroaker.", stock.Title, stock.StockVal),
 						})
@@ -333,13 +333,13 @@ func treatTargetValue(s stocks.Stock, target_val string) (stocks.Stock, error) {
 		mantissa, exponent string
 	)
 
-	// Cut off the operator, which is the first digit
+	// Cut off the operator, which is the first digit (if present)
 	if strings.ContainsAny(treated_string, "-+") {
 		operator = treated_string[0]
 		treated_string = treated_string[1:]
 	}
 
-	// Cut off the percentage char, which is the last digit (if present)
+	// Cut off the percentage digit, which is the last digit (if present)
 	if percent_index = strings.Index(treated_string, "%"); percent_index != -1 {
 		treated_string = treated_string[:percent_index]
 	}

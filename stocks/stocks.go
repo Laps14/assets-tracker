@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"hash/maphash"
 	"math"
+	"regexp"
+	"strings"
 )
 
 // A struct to hold a hash table of Stock
@@ -96,6 +98,24 @@ func (s *Stocks) InsertAll(stockSlice []Stock) {
 
 func (s *Stocks) Search(stock_title string) (*Stock, error) {
 
+	reg := regexp.MustCompile(`\B\d{1,2}[F]?\b`)
+
+	if reg.MatchString(stock_title) == false {
+		stock_title4F := stock_title + "4F"
+		stock4F, err := s.Search(stock_title + "4F")
+		if err != nil {
+			stock_title3F := stock_title + "3F"
+			stock3F, err := s.Search(stock_title + "3F")
+
+			if err != nil {
+				return nil, fmt.Errorf("Não foi possível encontrar %q, %q e %q. Por favor, revise o nome.\n", stock_title, stock_title4F, stock_title3F)
+			}
+
+			return stock3F, nil
+		}
+		return stock4F, nil
+	}
+
 	if len(stock_title) < 3{
 		s.hash.WriteString(stock_title)
 	} else {
@@ -118,7 +138,7 @@ func (s *Stocks) SearchAll(stockTitles []string) []*Stock {
 	stockSlice := make([]*Stock, 0)
 
 	for _, title := range stockTitles {
-		stock, err := s.Search(title)
+		stock, err := s.Search(strings.ToUpper(title))
 
 		if err != nil {
 			fmt.Printf("ERROR: %v\n", err)

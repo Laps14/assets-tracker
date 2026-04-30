@@ -178,6 +178,8 @@ func (c *Config) selectDisplayServer() error {
 	switch strings.ToLower(val) {
 	case "cinnamon":
 		c.StockNotifier = notifications.NewLibNotifyNotifier()
+	case "hyprland":
+		c.StockNotifier = notifications.NewHyprlandNotifier()
 	}
 
 	return nil
