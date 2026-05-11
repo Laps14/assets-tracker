@@ -6,6 +6,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"slices"
 )
 
 // A struct to hold a hash table of Stock
@@ -69,12 +70,11 @@ func (s *Stocks) Insert(stock *Stock) {
 	var title string
 
 	if len(stock.Title) < 3 {
-		s.hash.WriteString(stock.Title)
-		title = stock.Title
+		title = strings.ToUpper(stock.Title)
 	} else {
-		s.hash.WriteString(stock.Title[:3])
-		title = stock.Title[:3]
+		title = strings.ToUpper(stock.Title[:3])
 	}
+	s.hash.WriteString(title)
 
 	n := s.stocks[s.hash.Sum64() % uint64(len(s.stocks))]
 
@@ -98,14 +98,17 @@ func (s *Stocks) InsertAll(stockSlice []Stock) {
 
 func (s *Stocks) Search(stock_title string) (*Stock, error) {
 
-	reg := regexp.MustCompile(`\B\d{1,2}[F]?\b`)
+	stock_title = strings.ToUpper(stock_title)
+
+	reg := regexp.MustCompile(`\B\d{1,2}[Bb]?[Ff]?\b`)
 
 	if reg.MatchString(stock_title) == false {
 		stock_title4F := stock_title + "4F"
-		stock4F, err := s.Search(stock_title + "4F")
+		stock4F, err := s.Search(strings.Join([]string{stock_title, "4F"}, ""))
+
 		if err != nil {
 			stock_title3F := stock_title + "3F"
-			stock3F, err := s.Search(stock_title + "3F")
+			stock3F, err := s.Search(strings.Join([]string{stock_title, "3F"}, ""))
 
 			if err != nil {
 				return nil, fmt.Errorf("Não foi possível encontrar %q, %q e %q. Por favor, revise o nome.\n", stock_title, stock_title4F, stock_title3F)
@@ -149,6 +152,22 @@ func (s *Stocks) SearchAll(stockTitles []string) []*Stock {
 	}
 
 	return stockSlice
+}
+
+func (s *Stocks) UpdateAll(stockSlice []Stock) {
+	for _, updatedStock := range stockSlice {
+		stock, err := s.Search(updatedStock.Title)
+
+		if err != nil {
+			continue
+		}
+		
+		stock.StockVal = updatedStock.StockVal
+	}
+}
+
+func (s *Stocks) ToSlice() []*Stock {
+	return slices.Concat(s.stocks...)
 }
 
 func (s *Stocks) PrintAll() {

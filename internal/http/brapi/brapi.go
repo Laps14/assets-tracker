@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Laps14/assets-tracker/stocks"
-	"golang.org/x/sys/unix"
 	"net/http"
-	"os/signal"
-	"strings"
+	// "strings"
+	// "time"
+	// "os"
+	"io"
 )
 
 type token string
@@ -33,69 +34,19 @@ func NewBrapiClient(ctx context.Context) {
 	}
 }
 
-func GetAllStocks(ctx context.Context) (context.Context, <-chan []stocks.Stock) {
-	signal.Reset()
-
-	ctx, stop := signal.NotifyContext(
-		ctx,
-		unix.SIGINT, unix.SIGQUIT, unix.SIGHUP,
-	)
-
-	req, err := http.NewRequest(http.MethodGet, baseURL + "list?type=stock", http.NoBody)
-
-	if err != nil {
-		fmt.Errorf("ERROR: %v", err)
-	}
-
-	req.Header = header
+func GetAllStocks(ctx context.Context) <-chan []stocks.Stock {
 
 	stockchan := make(chan []stocks.Stock)
 
-	go func(sc chan []stocks.Stock) {
-		defer stop()
-		resp, err := http.DefaultClient.Do(req)
-		defer resp.Body.Close()
-
-		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
-			return
-		}
-
-		dec := json.NewDecoder(resp.Body)
+	go func () {
 		stockSlice := make([]stocks.Stock, 0)
 
-		var jsonBody stockRequest
-
-		if err := dec.Decode(&jsonBody); err != nil {
-			fmt.Println("ERROR: ", err)
-			return
-		}
-
-		for _, v := range jsonBody.Stocks {
-			stockSlice = append(stockSlice, stocks.Stock{Title: v["stock"].(string), Description: v["name"].(string), StockVal: v["close"].(float64)})
-		}
-
-		sc <- stockSlice
-	}(stockchan)
-
-	return ctx, stockchan
-}
-
-func GetStocks(ctx context.Context, stockSlice []stocks.Stock) ([]stocks.Stock, error) {
-	var (
-		stock_tickers strings.Builder
-		ith_stock = 0
-		updateStocks = make([]stocks.Stock, 0)
-		jsonBody stockRequest
-	)
-
-	for ; ith_stock < len(stockSlice); ith_stock++ {
-		stock_tickers.WriteString(stockSlice[ith_stock].Title)
-
-		req, err := http.NewRequest(http.MethodGet, baseURL + stock_tickers.String(), http.NoBody)
+		req, err := http.NewRequest(http.MethodGet, baseURL + "list?type=stock", http.NoBody)
 
 		if err != nil {
-			return nil, fmt.Errorf("ERROR: %v\n", err)
+			fmt.Printf("\n%v\n", err)
+			stockchan <- stockSlice
+			return
 		}
 
 		req.Header = header
@@ -103,83 +54,92 @@ func GetStocks(ctx context.Context, stockSlice []stocks.Stock) ([]stocks.Stock, 
 		resp, err := http.DefaultClient.Do(req)
 
 		if err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("ERROR: %v\n", err)
+			fmt.Printf("\n%v\n", err)
+			stockchan <- stockSlice
+			return
 		}
+		defer resp.Body.Close()
 
 		dec := json.NewDecoder(resp.Body)
 
-		err = dec.Decode(&jsonBody)
+		var jsonBody stockRequest
 
-		if err != nil {
-			return nil, fmt.Errorf("ERROR: %v\n", err)
+		if err := dec.Decode(&jsonBody); err != nil {
+			fmt.Printf("\n%v\n", err)
+			stockchan <- stockSlice
+			return
 		}
 
-		for _, stock := range jsonBody.Results {
-			// fmt.Printf("%d\t%v\n", i, stock)
-			tempStock := stocks.Stock{
-				Title: stock["symbol"].(string),
-				Description: stock["longName"].(string),
-				StockVal: stock["regularMarketPrice"].(float64),
-			}
-			updateStocks = append(updateStocks, tempStock)
+		for _, v := range jsonBody.Stocks {
+			stockSlice = append(stockSlice, stocks.Stock{Title: v["stock"].(string), Description: v["name"].(string), StockVal: v["close"].(float64),
+			CompanyLogo: v["logo"].(string)})
 		}
 
-		stock_tickers.Reset()
-		resp.Body.Close()
+		stockchan <- stockSlice
+	}()
+
+	return stockchan
+}
+
+func GetStock(ctx context.Context, stock stocks.Stock) (stocks.Stock, error) {
+	var jsonBody stockRequest
+
+	req, err := http.NewRequest(http.MethodGet, baseURL + stock.Title, http.NoBody)
+
+	if err != nil {
+		return stocks.Stock{}, fmt.Errorf("ERROR: %v\n", err)
 	}
 
-	return updateStocks, nil
+	req.Header = header
+
+	resp, err := http.DefaultClient.Do(req)
+
+	if err != nil {
+		return stocks.Stock{}, fmt.Errorf("ERROR: %v\n", err)
+	}
+	defer resp.Body.Close()
+
+	dec := json.NewDecoder(resp.Body)
+
+	err = dec.Decode(&jsonBody)
+
+	if err != nil {
+		return stocks.Stock{}, fmt.Errorf("ERROR: %v\n", err)
+	}
+
+	updatedStock := stocks.Stock{
+		Title: jsonBody.Results[0]["symbol"].(string),
+		Description: jsonBody.Results[0]["longName"].(string),
+		StockVal: jsonBody.Results[0]["regularMarketPrice"].(float64),
+		CompanyLogo: jsonBody.Results[0]["logourl"].(string),
+	}
+
+	return updatedStock, nil
 }
-//
-// func GetStocks(ctx context.Context, stockSlice []stocks.Stock) ([]stocks.Stock, error) {
-// 	var (
-// 		stock_tickers strings.Builder
-// 		ith_stock = 0
-// 		updateStocks = make([]stocks.Stock, 0)
-// 		jsonBody stockRequest
-// 	)
-//
-// 	for ; ith_stock < len(stockSlice) - 1; ith_stock++ {
-// 		stock_tickers.WriteString(stockSlice[ith_stock].Title + ",")
-// 	}
-// 	defer stock_tickers.Reset()
-//
-// 	stock_tickers.WriteString(stockSlice[ith_stock].Title)
-//
-// 	req, err := http.NewRequest(http.MethodGet, baseURL + stock_tickers.String(), http.NoBody)
-//
-// 	if err != nil {
-// 		return nil, fmt.Errorf("ERROR: %v\n", err)
-// 	}
-//
-// 	req.Header = header
-//
-// 	resp, err := http.DefaultClient.Do(req)
-//
-// 	if err != nil {
-// 		return nil, fmt.Errorf("ERROR: %v\n", err)
-// 	}
-// 	defer resp.Body.Close()
-//
-// 	dec := json.NewDecoder(resp.Body)
-//
-// 	err = dec.Decode(&jsonBody)
-//
-// 	if err != nil {
-// 		return nil, fmt.Errorf("ERROR: %v\n", err)
-// 	}
-//
-// 	for _, stock := range jsonBody.Results {
-// 		// fmt.Printf("%d\t%v\n", i, stock)
-// 		tempStock := stocks.Stock{
-// 			Title: stock["symbol"].(string),
-// 			Description: stock["longName"].(string),
-// 			StockVal: stock["regularMarketPrice"].(float64),
-// 		}
-// 		updateStocks = append(updateStocks, tempStock)
-// 		fmt.Println(updateStocks)
-// 	}
-//
-// 	return updateStocks, nil
-// }
+
+func GetStockCompanyLogo(ctx context.Context, stock stocks.Stock) ([]byte, error) {
+
+	req, err := http.NewRequest(http.MethodGet, stock.CompanyLogo, http.NoBody)
+	
+	if err != nil {
+		return nil, fmt.Errorf("%v", err)
+	}
+
+	header.Add("Accept", "image/svg+xml")
+	req.Header = header
+
+	resp, err := http.DefaultClient.Do(req)
+
+	if err != nil {
+		return nil, fmt.Errorf("%v", err)
+	}
+
+	img_bytes, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return nil, fmt.Errorf("%v", err)
+	}
+	defer resp.Body.Close()
+
+	return img_bytes, nil
+}

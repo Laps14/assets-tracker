@@ -3,13 +3,13 @@ package config
 import (
 	"bufio"
 	"context"
-	// "errors"
 	"fmt"
 	"github.com/Laps14/assets-tracker/tty"
 	"github.com/Laps14/assets-tracker/notifications"
 	"os"
 	"strings"
-	// "io"
+	"github.com/Laps14/assets-tracker/stocks"
+	"text/template"
 )
 
 var (
@@ -20,12 +20,15 @@ var (
 	DOWN_DOUBLE_TRIANGLE = '\u23EC'
 )
 
-const REGULAR_USER_PERM = 0o0744
+const (
+	REGULAR_USER_PERM = 0o0744
+)
 
 type Config struct {
 	UserHomeDir string
 	TrackerConfDir string
 	TrackedAssets string
+	TrackedAssetsLogos string
 	ClientConf string
 	AccessToken string
 	XDGSessionDesktop string
@@ -44,7 +47,9 @@ func InitializeConfig() (*Config, error) {
 	}
 
 	c.TrackerConfDir = c.UserHomeDir + "/.assets-tracker/"
-	c.TrackedAssets = c.TrackerConfDir + "tracked-assets.conf"
+	// c.TrackedAssets = c.TrackerConfDir + "tracked-assets.conf"
+	c.TrackedAssets = os.TempDir() + "/assets-tracker/"
+	c.TrackedAssetsLogos = c.TrackedAssets + "logos/"
 	c.ClientConf = c.TrackerConfDir + "client.conf"
 	c.selectDisplayServer()
 
@@ -71,16 +76,29 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 
 	if err != nil {
 		if os.IsNotExist(err) {
-			tracked_assets, err = os.Create(c.TrackedAssets)
+			os.Mkdir(c.TrackedAssets, os.ModeDir | REGULAR_USER_PERM)
+			tracked_assets, err = os.Open(c.TrackedAssets)
 
 			if err != nil {
 				panic(1)
 			}
-
-			tracked_assets.Chmod(REGULAR_USER_PERM)
 		}
 	}
 	defer tracked_assets.Close()
+
+	tracked_assets_logos, err := os.Open(c.TrackedAssetsLogos)
+
+	if err != nil {
+		if os.IsNotExist(err) {
+			os.Mkdir(c.TrackedAssetsLogos, os.ModeDir | REGULAR_USER_PERM)
+			tracked_assets_logos, err = os.Open(c.TrackedAssetsLogos)
+
+			if err != nil {
+				panic(1)
+			}
+		}
+	}
+	defer tracked_assets_logos.Close()
 
 	// Checks if the client.conf file exists. If not, creates it
 	// and ask for the user access token to save it and use
@@ -180,6 +198,37 @@ func (c *Config) selectDisplayServer() error {
 		c.StockNotifier = notifications.NewLibNotifyNotifier()
 	case "hyprland":
 		c.StockNotifier = notifications.NewHyprlandNotifier()
+	}
+
+	return nil
+}
+
+func (c *Config) NewTrackedAssetTempFile(s *stocks.Stock) error {
+	temp_asset_file_template, err := template.New("temp-asset-file").ParseFiles("./temp_asset_template.template")
+	
+	if err != nil {
+		panic(1)
+	}
+
+	asset_file_path := strings.Join([]string{c.TrackedAssets, s.Title, ".toml"}, "")
+	asset_temp_file, err := os.Create(asset_file_path)
+
+	if err != nil {
+		return fmt.Errorf("Error ao criar o arquivo temporário da ação %s no diretório %s.", s.Title, c.TrackedAssets)
+	}
+
+	asset_logo_path := strings.Join([]string{c.TrackedAssetsLogos, s.CompanyLogo}, "")
+	// asset_temp_logo, err := os.Create(asset_logo_path)
+	_, err = os.Create(asset_logo_path)
+
+	if err != nil {
+		return fmt.Errorf("Error ao criar o arquivo temporário da ação %s no diretório %s.", s.Title, c.TrackedAssets)
+	}
+
+	err = temp_asset_file_template.Execute(asset_temp_file, *s)
+	
+	if err != nil {
+		panic(1)
 	}
 
 	return nil

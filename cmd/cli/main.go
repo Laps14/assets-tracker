@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -11,14 +10,16 @@ import (
 	"github.com/Laps14/assets-tracker/stocks"
 	"github.com/Laps14/assets-tracker/tty"
 	"golang.org/x/sys/unix"
-	"maps"
+	// "maps"
 	"math"
 	"os"
+	"os/exec"
 	"os/signal"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 )
@@ -32,6 +33,7 @@ const (
 )
 
 var loading_chars = [...]string{"\u2819", "\u2838", "\u28B0", "\u28E0", "\u28C4", "\u2846", "\u2807"}
+var chanUpdateStocksRoutine chan bool
 
 func main() {
 	term, err := tty.NewTtyConfig()
@@ -51,8 +53,6 @@ func main() {
 	ctx := context.Background()
 	mainSignals := make(chan os.Signal) // Will be used to handle signals
 
-	term.ShutdownTtyRoutine(mainSignals) // Shutdown goroutine
-
 	conf.CheckDirectories(ctx, term)
 
 	ctx = brapi.NewContext(ctx, conf.AccessToken)
@@ -65,29 +65,55 @@ func main() {
 
 	trackedStocksChan := startTrackerNotifications(ctx, &trackedStocks, conf)
 
+	var ith_char int = 0
+
+	stockChan := brapi.GetAllStocks(ctx)
+
+	term.DisableCursor()
+
+	MainOuterLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				fmt.Printf("\x1b[2K\r")
+				return
+			case stockSlice := <-stockChan:
+				if len(stockSlice) == 0 {
+					fmt.Printf("\n\nERROR 0\n\n")
+					break MainOuterLoop
+				}
+				stock_hmap.InsertAll(stockSlice)
+				break MainOuterLoop
+			default:
+				loadingLine(&ith_char, term)
+			}
+		}
+
+	term.EnableCursor()
+
+	term.ShutdownTtyRoutine(mainSignals) // Shutdown goroutine
+
+	chanUpdateStocksRoutine = updateStocksRoutine(ctx, stock_hmap)
+
 	// Some commands call signal.Reset because it will be able
 	// to cancel "itself" without quitting the tracker.
 	// After the execution of a command, the main will be able
 	// to receive signals again.
 
 	for {
-		getCmd(ctx, term, stock_hmap, trackedStocksChan)
+		getCmd(ctx, term, stock_hmap, trackedStocksChan, conf)
 		signal.Notify(mainSignals, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
 	}
 }
 
-func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksChan chan<- stocks.Stock) {
+func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksChan chan<- stocks.Stock, conf *config.Config) {
 	fmt.Print("\x1b[1m\u276F\u276F \x1b[0m")
 
-	buf := bufio.NewReader(os.Stdin)
-
-	line, err := buf.ReadString('\n')
+	line, err := term.ReadLine()
 
 	if err != nil {
 		fmt.Errorf("Error while reading the input")
 		panic(1)
-	} else if len(line) <= 1 {
-		return
 	}
 
 	args := strings.Fields(line)
@@ -102,9 +128,7 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 		var str string
 		str = strings.Join(args[1:], " ")
 
-		// reg := regexp.MustCompile(`\b\w+\d{0,2}\w?\b[[:blank:]]\b\d+\b`)
-		// reg := regexp.MustCompile(`\b[A-Z]{4}\d*[F]?[[:blank:]]\d+[\d{1,2}|\%]?\b`)
-		reg := regexp.MustCompile(`\b[a-zA-Z]{4}(\d{0,2}|\d{0,2}[Ff])[[:blank:]][\-\+]?\d+(?:\.\d{1,2})?(?:\%\B)?`)
+		reg := regexp.MustCompile(`\b[a-zA-Z]{4}(\d{0,2}|\d{0,2}[Bb]?[Ff]?)[[:blank:]][\-\+]?\d+(?:\.\d{1,2})?(?:\%\B)?`)
 
 		errs := slices.Compact(reg.Split(str, -1)) // Will take off repeated errors
 		blankSpaces_errs := strings.TrimSpace(strings.Join(errs, " ")) // Will trim annoying spaces and empty strings
@@ -112,14 +136,14 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 		if len(blankSpaces_errs) > 0 {
 			for _, e := range errs {
 				if trimmed := strings.TrimSpace(e); trimmed != "" {
-					fmt.Printf("\nArgumento inválido próximo a %q.\n", e)
+					fmt.Printf("Argumento inválido próximo a %q.\n", e)
 				}
 			}
 			return
 		}
 
 		for i, r := 0, args[1:]; i < len(r); i += 2 {
-			stock, err := s.Search(strings.ToUpper(r[i]))
+			stock, err := s.Search(r[i])
 
 			if err != nil {
 				fmt.Printf("ERROR: %v\n", err)
@@ -173,33 +197,55 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 			}
 		}
 
-		var ith_char int = 0
+		chanUpdateStocksRoutine <- true
 
-		ctx, stockchan := brapi.GetAllStocks(ctx)
+		var ith_char int = 0
 
 		term.DisableCursor()
 		defer term.EnableCursor()
 
-		for{
+		for {
 			select {
-			case <-ctx.Done():
-				fmt.Printf("\x1b[2K\r")
-				return
-			case stockSlice, ok := <-stockchan:
-				if !ok {
-					fmt.Printf("\x1b[2K\r")
+			case result := <-chanUpdateStocksRoutine:
+				if result == true {
+					sorted := s.ToSlice()
+					sortByStock(sorted)
+					print2Cols(sorted, term)
 					return
 				}
-				s.InsertAll(stockSlice)
-				sortByStock(stockSlice)
-				print2Cols(stockSlice, term)
-				return 
 			default:
 				loadingLine(&ith_char, term)
 			}
 		}
 
-		return
+	case "s", "show":
+		var str string
+		str = strings.Join(args[1:], " ")
+
+		// Checks if the input line has any non-word char
+		// It can't be a simple \W because then the spaces
+		// would be interpreted as errors.
+		reg := regexp.MustCompile(`\b[a-zA-Z]{4}(?:\d{0,2}|\d{1,2}[Ff])\b`) 
+
+		searched_stock := reg.FindString(str)
+
+		errs := slices.Compact(reg.Split(str, -1)) // Will take off repeated errors
+		blankSpaces_errs := strings.TrimSpace(strings.Join(errs, " ")) // Will trim annoying spaces and empty strings
+
+		if len(blankSpaces_errs) > 0 {
+			for _, e := range errs {
+				if trimmed := strings.TrimSpace(e); trimmed != "" {
+					fmt.Printf("\nArgumento inválido próximo a %q.\n", e)
+				}
+			}
+			return
+		}
+		err := showStock(ctx, searched_stock, s, conf, term)
+
+		if err != nil {
+			fmt.Printf("\n\n%v\n\n", err)
+			return
+		}
 	case "h", "help":
 		templ, err := template.New("help").Parse(help_templ)
 		
@@ -220,17 +266,18 @@ func loadingLine(ith_char *int, term *tty.Tty) {
 	fmt.Fprintf(&strBuilder, "Carregando %s", loading_chars[*ith_char])
 	fmt.Print(strBuilder.String())
 	time.Sleep(50 * time.Millisecond)
+	fmt.Print("\x1b[2K")
 	term.MoveCurPos(term.Rows(), 1)
 	*ith_char++
 }
 
-func sortByStock(stockSlice []stocks.Stock) {
+func sortByStock(stockSlice []*stocks.Stock) {
 	sort.Slice(stockSlice, func(i, j int) bool {
 		return stockSlice[i].Title < stockSlice[j].Title
 	})
 }
 
-func print2Cols(stockSlice []stocks.Stock, term *tty.Tty) {
+func print2Cols(stockSlice []*stocks.Stock, term *tty.Tty) {
 
 	term.EraseEntireLine()
 
@@ -276,23 +323,24 @@ func startTrackerNotifications(ctx context.Context, trackedStocks *map[string]st
 		for {
 			select {
 			case <-ctx.Done():
+				close(c)
+				t.Stop()
 				return
 			case <-t.C: // 5 minutes have passed
 				if len(tempMap) <= 0 {
 					continue
 				}
 
-				// receives slice of Stock returns []stocks.Stock
-				updatedStocks, err := brapi.GetStocks(ctx, slices.Collect(maps.Values(tempMap)))
+				for _, stock := range tempMap {
+					updatedStock, err := brapi.GetStock(ctx, stock)
 
-				if err != nil {
-					fmt.Printf("ERROR: %v\n", err)
-					continue
-				}
+					if err != nil {
+						fmt.Printf("ERROR: %v\n", err)
+						continue
+					}
 
-				for _, stock := range updatedStocks {
-					current := int(stock.StockVal * 100)
-					target := int(tempMap[stock.Title].StockVal * 100)
+					current := int(updatedStock.StockVal * 100)
+					target := int(stock.StockVal * 100)
 					below_target, above_target := target - error_rate, target + error_rate
 
 					if current >= below_target && current <= above_target {
@@ -305,7 +353,7 @@ func startTrackerNotifications(ctx context.Context, trackedStocks *map[string]st
 
 						if err != nil {
 							fmt.Printf("\n\n%v\n\n", err)
-							return
+							continue
 						}
 					}
 				}
@@ -386,4 +434,167 @@ func treatTargetValue(s stocks.Stock, target_val string) (stocks.Stock, error) {
 	}
 
 	return s, nil
+}
+
+func updateStocksRoutine(baseCtx context.Context, stock_hmap *stocks.Stocks) chan bool {
+	c := make(chan bool)
+	scheduledUpdate := time.NewTimer(time.Minute * 5)
+	// scheduledUpdate := time.NewTimer(time.Second * 5)
+
+	var wg sync.WaitGroup
+
+	go func() {
+		for {
+			select {
+			case <-c: 
+				if !scheduledUpdate.Stop() {
+					wg.Wait()
+					c <- true
+					break
+				}
+
+				ctx, stop := signal.NotifyContext(baseCtx, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
+				stockChan := brapi.GetAllStocks(ctx)
+
+				CLoop:
+					for {
+						select {
+						case <-ctx.Done():
+							fmt.Printf("\x1b[2K\r")
+							stop()
+							break CLoop
+						case stockSlice := <-stockChan:
+							if len(stockSlice) == 0 {
+								fmt.Printf("\n\nERROR 0\n\n")
+								break CLoop
+							}
+							stock_hmap.UpdateAll(stockSlice)
+							break CLoop
+						}
+					}
+
+				stop()
+				scheduledUpdate.Reset(time.Second * 5)
+				c <- true
+			case <-scheduledUpdate.C:
+				wg.Add(1)
+
+				go func() {
+					ctx, stop := signal.NotifyContext(baseCtx, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
+					stockChan := brapi.GetAllStocks(ctx)
+
+					ScheduledChanLoop:
+						for {
+							select {
+							case <-ctx.Done():
+								break ScheduledChanLoop
+							case stockSlice := <-stockChan:
+								if len(stockSlice) == 0 {
+									fmt.Printf("\n\nERROR 0\n\n")
+									break ScheduledChanLoop
+								}
+								stock_hmap.UpdateAll(stockSlice)
+								break ScheduledChanLoop
+							}
+						}
+
+					stop()
+					scheduledUpdate.Reset(time.Second * 5)
+					wg.Done()
+				}()
+			}
+		}
+	}()
+
+	return c
+}
+
+func showStock(ctx context.Context, stockTitle string, s *stocks.Stocks, conf *config.Config, term *tty.Tty) error {
+	// Sadly, and unknowingly, Brapi doesn't show a lot of data for stocks
+	// which are fractional (has an "F" in it's identifier). Also, the URL
+	// for the company logo of fractional stocks are default pointing to
+	// the Brapi'slogo. Because of all that, this function takes off
+	// the "F" and then proceed to show the info about it.
+
+	stockTitle = strings.Replace(strings.ToUpper(stockTitle), "F", "", -1)
+
+	stock, err := s.Search(stockTitle)
+
+	if err != nil {
+		return err
+	}
+
+	stock.String()
+
+	tempStock, err := brapi.GetStock(ctx, *stock)
+
+	if err != nil {
+		return err
+	}
+
+	stock.StockVal = tempStock.StockVal
+
+	img_bytes, err := brapi.GetStockCompanyLogo(ctx, *stock)
+
+	if err != nil {
+		return err
+	}
+
+	str := strings.Join([]string{conf.TrackedAssetsLogos, stock.Title, `.svg`}, "")
+	img_file_svg, err := os.Create(str)
+
+	if err != nil {
+		return err
+	}
+
+	_, err = img_file_svg.Write(img_bytes)
+
+	if err != nil {
+		return err
+	}
+
+	img_file_png := strings.Join([]string{conf.TrackedAssetsLogos, stock.Title, `.png`}, "")
+
+	cmd := exec.Command("/usr/bin/ffmpeg", "-loglevel", "quiet", "-i", img_file_svg.Name(), img_file_png)
+
+	err = cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	err = cmd.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	old_termios := term.GetTermios()
+
+	term.SttySane()
+
+	cmd = exec.Command("/usr/bin/chafa", "-s", "35x35", img_file_png)
+	// cmd = exec.Command("/usr/bin/chafa", "-s", "25x25", "--symbols", `[\#]`, "--fg-only", img_file_png)
+
+	cmd.Stdout = os.Stdout
+
+	err = cmd.Start()
+
+	if err != nil {
+		return err
+	}
+
+	err = cmd.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	err = term.SetTermios(&old_termios)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
