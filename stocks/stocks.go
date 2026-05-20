@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"hash/maphash"
 	"math"
+	"regexp"
+	"strings"
+	"slices"
 )
 
 // A struct to hold a hash table of Stock
@@ -12,7 +15,7 @@ import (
 // for learning purposes.
 type Stocks struct {
 	lfactor float32
-	stocks [][]Stock
+	stocks [][]*Stock
 	hash maphash.Hash
 }
 
@@ -21,7 +24,7 @@ type Stocks struct {
 func NewStocks() *Stocks {
 	return &Stocks{
 		lfactor: 0.6,
-		stocks: make([][]Stock, 41),
+		stocks: make([][]*Stock, 41),
 	}
 }
 
@@ -30,7 +33,7 @@ func NewStocks() *Stocks {
 // Stock.
 func (s *Stocks) increaseSize() {
 	var (
-		temp = make([][]Stock, 0)
+		temp = make([][]*Stock, 0)
 		temp_length = len(s.stocks)
 	)
 
@@ -38,7 +41,7 @@ func (s *Stocks) increaseSize() {
 
 	for i, stocks := 0, len(s.stocks); i < stocks; i++ {
 		for _, j := range s.stocks[i] {
-			s.hash.WriteString(j.Title)
+			s.hash.WriteString(j.Title[:3])
 			temp[s.hash.Sum64() % uint64(len(temp))] = append(temp[s.hash.Sum64() % uint64(len(temp))], j)
 			s.hash.Reset()
 		}
@@ -47,29 +50,74 @@ func (s *Stocks) increaseSize() {
 	s.stocks = temp
 }
 
-func (s *Stocks) insert(stock *Stock) {
+func (s *Stocks) newPNSize(n *int, temp *[][]*Stock) bool {
+	*n = (*n+1) * 2
 
-	if len(stock.Title) < 3{
-		s.hash.WriteString(stock.Title)
-	} else {
-		s.hash.WriteString(stock.Title[:3])
+	if *n % 2 == 0 { *n += 1 }
+
+	sqrt_stocks := int(math.Sqrt(float64(*n)))
+
+	for i := 2; i <= sqrt_stocks; i++ {
+		if *n % i == 0 { return false }
 	}
+
+	*temp = make([][]*Stock, *n)
+
+	return true
+}
+
+func (s *Stocks) Insert(stock *Stock) {
+	var title string
+
+	if len(stock.Title) < 3 {
+		title = strings.ToUpper(stock.Title)
+	} else {
+		title = strings.ToUpper(stock.Title[:3])
+	}
+	s.hash.WriteString(title)
 
 	n := s.stocks[s.hash.Sum64() % uint64(len(s.stocks))]
 
 	if (float32(len(n)) / float32(len(s.stocks))) > s.lfactor {
 		s.hash.Reset()
 		s.increaseSize()
-		s.hash.WriteString(stock.Title)
+		s.hash.WriteString(title)
 		n = s.stocks[s.hash.Sum64() % uint64(len(s.stocks))]
 	}
 
-	s.stocks[s.hash.Sum64() % uint64(len(s.stocks))] = append(n, *stock)
+	s.stocks[s.hash.Sum64() % uint64(len(s.stocks))] = append(n, stock)
 
 	s.hash.Reset()
 }
 
-func (s *Stocks) search(stock_title string) (*Stock, error) {
+func (s *Stocks) InsertAll(stockSlice []Stock) {
+	for _, stock := range stockSlice {
+		s.Insert(&stock)
+	}
+}
+
+func (s *Stocks) Search(stock_title string) (*Stock, error) {
+
+	stock_title = strings.ToUpper(stock_title)
+
+	reg := regexp.MustCompile(`\B\d{1,2}[Bb]?[Ff]?\b`)
+
+	if reg.MatchString(stock_title) == false {
+		stock_title4F := stock_title + "4F"
+		stock4F, err := s.Search(strings.Join([]string{stock_title, "4F"}, ""))
+
+		if err != nil {
+			stock_title3F := stock_title + "3F"
+			stock3F, err := s.Search(strings.Join([]string{stock_title, "3F"}, ""))
+
+			if err != nil {
+				return nil, fmt.Errorf("Não foi possível encontrar %q, %q e %q. Por favor, revise o nome.\n", stock_title, stock_title4F, stock_title3F)
+			}
+
+			return stock3F, nil
+		}
+		return stock4F, nil
+	}
 
 	if len(stock_title) < 3{
 		s.hash.WriteString(stock_title)
@@ -82,30 +130,47 @@ func (s *Stocks) search(stock_title string) (*Stock, error) {
 	for _, stock := range s.stocks[n]{
 		if stock.Title != stock_title { continue }
 		s.hash.Reset()
-		return &stock, nil
+		return stock, nil
 	}
 
 	s.hash.Reset()
 	return nil, fmt.Errorf("'%s' Not found", stock_title)
 }
 
-func (s *Stocks) newPNSize(n *int, temp *[][]Stock) bool {
-	*n = (*n+1) * 2
+func (s *Stocks) SearchAll(stockTitles []string) []*Stock {
+	stockSlice := make([]*Stock, 0)
 
-	if *n % 2 == 0 { *n += 1 }
+	for _, title := range stockTitles {
+		stock, err := s.Search(strings.ToUpper(title))
 
-	sqrt_stocks := int(math.Sqrt(float64(*n)))
+		if err != nil {
+			fmt.Printf("ERROR: %v\n", err)
+			return nil
+		}
 
-	for i := 2; i <= sqrt_stocks; i++ {
-		if *n % i == 0 { return false }
+		stockSlice = append(stockSlice, stock)
 	}
 
-	*temp = make([][]Stock, *n)
-
-	return true
+	return stockSlice
 }
 
-func (s *Stocks) printAll() {
+func (s *Stocks) UpdateAll(stockSlice []Stock) {
+	for _, updatedStock := range stockSlice {
+		stock, err := s.Search(updatedStock.Title)
+
+		if err != nil {
+			continue
+		}
+		
+		stock.StockVal = updatedStock.StockVal
+	}
+}
+
+func (s *Stocks) ToSlice() []*Stock {
+	return slices.Concat(s.stocks...)
+}
+
+func (s *Stocks) PrintAll() {
 	for i, stocks := 0, len(s.stocks); i < stocks; i++ {
 		if len(s.stocks[i]) != 0 { fmt.Printf("%d -> ", i) }
 		for _, j := range s.stocks[i] {

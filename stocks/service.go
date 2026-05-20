@@ -8,8 +8,8 @@ import (
 type UseCase interface {
 	Create(context.Context, string, string, Sector, float64, float64) (*Stock, error)
 	Update(context.Context, string, string, Sector, float64, float64) error
-	Delete(context.Context, uint64) error
-	Get(context.Context, uint64) (*Stock, error)
+	Delete(context.Context, int64) error
+	Get(context.Context, int64) (*Stock, error)
 	List(context.Context) ([]*Stock, error)
 }
 
@@ -23,19 +23,21 @@ func NewService(r Repository) *Service {
 	}
 }
 
-func (s *Service) Create(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float64) (*Stock, error) {
+func (s *Service) Create(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float64, target_vals []float64) (*Stock, error) {
+
 	stock := Stock{
 		Title: title,
 		Description: description,
 		Sect: sector,
 		TotalSupply: total_supply,
 		StockVal: stock_val,
+		TargetVals: target_vals,
 	}
 
 	id, err := s.Repo.Insert(ctx, &stock)
 
 	if err != nil {
-		fmt.Errorf("ERROR: %v", err)
+		fmt.Errorf("\n\nERROR: %v\n\n", err)
 		return nil, err
 	}
 
@@ -44,26 +46,28 @@ func (s *Service) Create(ctx context.Context, title, description string, sector 
 	return &stock, nil
 }
 
-func (s *Service) Update(ctx context.Context, title, description string, sector Sector, total_supply, stock_val float64) error {
+func (s *Service) Update(ctx context.Context, id int64, title, description string, sector Sector, total_supply, stock_val float64, target_vals []float64) error {
+
 	stock := Stock{
+		ID: id,
 		Title: title,
 		Description: description,
 		Sect: sector,
 		TotalSupply: total_supply,
 		StockVal: stock_val,
+		TargetVals: target_vals,
 	}
 
 	err := s.Repo.Update(ctx, &stock)
 
 	if err != nil {
-		fmt.Errorf("ERROR: %v", err)
 		return err
 	}
 
 	return nil
 }
 
-func (s *Service) Delete(ctx context.Context, id uint64) error {
+func (s *Service) Delete(ctx context.Context, id int64) error {
 	err := s.Repo.Delete(ctx, id)
 
 	if err != nil {
@@ -74,7 +78,7 @@ func (s *Service) Delete(ctx context.Context, id uint64) error {
 	return nil
 }
 
-func (s *Service) Get(ctx context.Context, id uint64) (*Stock, error) {
+func (s *Service) Get(ctx context.Context, id int64) (*Stock, error) {
 	stock, err := s.Repo.Select(ctx, id)
 
 	if err != nil {
@@ -89,8 +93,7 @@ func (s *Service) List(ctx context.Context) ([]*Stock, error) {
 	stocks, err := s.Repo.SelectAll(ctx)
 
 	if err != nil {
-		fmt.Errorf("ERROR: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("ERROR: %v", err)
 	}
 
 	return stocks, nil
