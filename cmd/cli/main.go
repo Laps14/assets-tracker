@@ -7,10 +7,11 @@ import (
 	"github.com/Laps14/assets-tracker/config"
 	"github.com/Laps14/assets-tracker/internal/http/brapi"
 	"github.com/Laps14/assets-tracker/notifications"
+	"github.com/Laps14/assets-tracker/stocks/postgres"
 	"github.com/Laps14/assets-tracker/stocks"
 	"github.com/Laps14/assets-tracker/tty"
 	"golang.org/x/sys/unix"
-	// "maps"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -33,9 +34,11 @@ const (
 )
 
 var loading_chars = [...]string{"\u2819", "\u2838", "\u28B0", "\u28E0", "\u28C4", "\u2846", "\u2807"}
+
 var chanUpdateStocksRoutine chan bool
 
 func main() {
+
 	term, err := tty.NewTtyConfig()
 
 	if err != nil {
@@ -61,9 +64,17 @@ func main() {
 
 	stock_hmap := stocks.NewStocks()
 
-	trackedStocks := make(map[string]stocks.Stock)
+	repository, err := postgres.NewRepository()
 
-	trackedStocksChan := startTrackerNotifications(ctx, &trackedStocks, conf)
+	if err != nil {
+		fmt.Printf("%v", err)
+		panic(1)
+	}
+	defer repository.Close()
+
+	service := stocks.NewService(repository)
+
+	trackedStocksChan, tempMap := startTrackerNotifications(ctx, conf, service)
 
 	var ith_char int = 0
 
@@ -101,12 +112,13 @@ func main() {
 	// to receive signals again.
 
 	for {
-		getCmd(ctx, term, stock_hmap, trackedStocksChan, conf)
+		getCmd(ctx, term, stock_hmap, trackedStocksChan, conf, tempMap)
 		signal.Notify(mainSignals, unix.SIGHUP, unix.SIGINT, unix.SIGTERM, unix.SIGQUIT)
 	}
 }
 
-func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksChan chan<- stocks.Stock, conf *config.Config) {
+func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksChan chan<- *stocks.Stock, conf *config.Config, tempMap *map[string]*stocks.Stock) {
+
 	fmt.Print("\x1b[1m\u276F\u276F \x1b[0m")
 
 	line, err := term.ReadLine()
@@ -114,6 +126,11 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 	if err != nil {
 		fmt.Errorf("Error while reading the input")
 		panic(1)
+	}
+
+	if len(line) == 0 {
+		fmt.Println("- Operação inválida")
+		return
 	}
 
 	args := strings.Fields(line)
@@ -150,7 +167,7 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 				continue
 			}
 
-			stockWithTargetVal, err := treatTargetValue(*stock, r[i+1])
+			stockWithTargetVal, err := treatTargetValue(stock, r[i+1])
 
 			if err != nil {
 				fmt.Println(err)
@@ -164,7 +181,9 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 
 		if len(args) > 1 {
 			if slices.Contains(args, "--tracked") {
-				fmt.Println("--tracked")
+				for _, v := range *tempMap {
+					v.String()
+				}
 				return
 			} else {
 				var str string
@@ -260,6 +279,7 @@ func getCmd(ctx context.Context, term *tty.Tty, s *stocks.Stocks, trackedStocksC
 }
 
 func loadingLine(ith_char *int, term *tty.Tty) {
+
 	var strBuilder strings.Builder
 
 	if *ith_char >= len(loading_chars) { *ith_char = 0 }
@@ -306,9 +326,16 @@ func print2Cols(stockSlice []*stocks.Stock, term *tty.Tty) {
 	fmt.Println()
 }
 
-func startTrackerNotifications(ctx context.Context, trackedStocks *map[string]stocks.Stock, conf *config.Config) chan<- stocks.Stock {
-	c := make(chan stocks.Stock)
-	tempMap := *trackedStocks
+func startTrackerNotifications(ctx context.Context, conf *config.Config, service *stocks.Service) (chan<- *stocks.Stock, *map[string]*stocks.Stock) {
+
+	c := make(chan *stocks.Stock)
+	tempMap := make(map[string]*stocks.Stock)
+
+	if trackedStocks, err := service.List(ctx); err == nil && len(trackedStocks) > 0 {
+		for _, v := range trackedStocks {
+			tempMap[v.Title] = v
+		}
+	}	
 
 	go func() {
 
@@ -328,32 +355,34 @@ func startTrackerNotifications(ctx context.Context, trackedStocks *map[string]st
 				return
 			case <-t.C: // 5 minutes have passed
 				if len(tempMap) <= 0 {
-					continue
+					break
 				}
 
 				for _, stock := range tempMap {
-					updatedStock, err := brapi.GetStock(ctx, stock)
+					updatedStock, err := brapi.GetStock(ctx, *stock)
 
 					if err != nil {
 						fmt.Printf("ERROR: %v\n", err)
-						continue
+						break
 					}
 
 					current := int(updatedStock.StockVal * 100)
-					target := int(stock.StockVal * 100)
-					below_target, above_target := target - error_rate, target + error_rate
 
-					if current >= below_target && current <= above_target {
-						// Send notification here
-						err = conf.StockNotifier.Notify(notifications.Notification{
-							TimeToExpire: 5e3,
-							StockTitle: stock.Title,
-							Body: fmt.Sprintf("%s acabou de bater %.2f. Abra agora seu homebroaker.", stock.Title, stock.StockVal),
-						})
+					for _, target := range stock.TargetVals {
+						below_target, above_target := int(target * 100) - error_rate, int(target * 100) + error_rate
 
-						if err != nil {
-							fmt.Printf("\n\n%v\n\n", err)
-							continue
+						if current >= below_target && current <= above_target {
+							// Send notification here
+							err = conf.StockNotifier.Notify(notifications.Notification{
+								TimeToExpire: 5e3,
+								StockTitle: stock.Title,
+								Body: fmt.Sprintf("%s acabou de bater %.2f. Abra agora seu homebroaker.", stock.Title, target),
+							})
+
+							if err != nil {
+								fmt.Printf("\n\n%v\n\n", err)
+								continue
+							}
 						}
 					}
 				}
@@ -363,17 +392,39 @@ func startTrackerNotifications(ctx context.Context, trackedStocks *map[string]st
 					return
 				}
 
+				if slices.Contains(slices.Collect(maps.Keys(tempMap)), stock.Title) {
+					if newTargetVals := tempMap[stock.Title]; !slices.Contains(newTargetVals.TargetVals, stock.StockVal) {
+						newTargetVals.TargetVals = append(newTargetVals.TargetVals, stock.StockVal)
+
+						err := service.Update(ctx, newTargetVals.ID, newTargetVals.Title, newTargetVals.Description, 0, 0, newTargetVals.StockVal, newTargetVals.TargetVals)
+
+						if err != nil {
+							fmt.Printf("\n\nERROR: %v\n\n", err)
+							panic(1)
+						}
+					}
+					break
+				}
+
+				stock, err := service.Create(ctx, stock.Title, stock.Description, 0, 0, stock.StockVal, []float64{stock.StockVal})
+
+				if err != nil {
+					fmt.Printf("\n\nERROR: %v\n\n", err)
+					break
+					// panic(1)
+				}
+
 				tempMap[stock.Title] = stock
-				*trackedStocks = tempMap
 			}
 		}
 	}()
 
-	return c
+	return c, &tempMap
 }
 
-func treatTargetValue(s stocks.Stock, target_val string) (stocks.Stock, error) {
+func treatTargetValue(s *stocks.Stock, target_val string) (*stocks.Stock, error) {
 	var (
+		stock = *s
 		treated_string string = target_val
 		percent_index int
 		operator byte = 0
@@ -410,30 +461,30 @@ func treatTargetValue(s stocks.Stock, target_val string) (stocks.Stock, error) {
 
 	if percent_index != -1 {
 		if operator == '+' {
-			s.StockVal += float64(int(s.StockVal * 1e2) * auxTargetVal) / 1e6
+			stock.StockVal += float64(int(stock.StockVal * 1e2) * auxTargetVal) / 1e6
 		} else if operator == '-' {
 			if auxTargetVal >= 1e4 { 
-				return stocks.Stock{}, fmt.Errorf("ERROR: Can't assign a value below 0.\n")
+				return &stocks.Stock{}, fmt.Errorf("ERROR: Can't assign a value below 0.\n")
 			}
-			s.StockVal -= float64(int(s.StockVal * 1e2) * auxTargetVal) / 1e6
+			stock.StockVal -= float64(int(stock.StockVal * 1e2) * auxTargetVal) / 1e6
 		} else {
-			s.StockVal = float64(int(s.StockVal * 1e2) * auxTargetVal) / 1e6
+			stock.StockVal = float64(int(stock.StockVal * 1e2) * auxTargetVal) / 1e6
 		}
 		return s, nil
 	}
 
 	if operator == '+' {
-		s.StockVal = float64(int(s.StockVal * 1e2) + auxTargetVal) / 1e2
+		stock.StockVal = float64(int(stock.StockVal * 1e2) + auxTargetVal) / 1e2
 	} else if operator == '-' {
-		if auxTargetVal > int(s.StockVal * 1e2) {
-			return stocks.Stock{}, fmt.Errorf("ERROR: Can't assign a value below 0.\n")
+		if auxTargetVal > int(stock.StockVal * 1e2) {
+			return &stocks.Stock{}, fmt.Errorf("ERROR: Can't assign a value below 0.\n")
 		}
-		s.StockVal = float64(int(s.StockVal * 1e2) - auxTargetVal) / 1e2
+		stock.StockVal = float64(int(stock.StockVal * 1e2) - auxTargetVal) / 1e2
 	} else {
-		s.StockVal = float64(auxTargetVal) / 1e2
+		stock.StockVal = float64(auxTargetVal) / 1e2
 	}
 
-	return s, nil
+	return &stock, nil
 }
 
 func updateStocksRoutine(baseCtx context.Context, stock_hmap *stocks.Stocks) chan bool {
@@ -574,7 +625,6 @@ func showStock(ctx context.Context, stockTitle string, s *stocks.Stocks, conf *c
 	term.SttySane()
 
 	cmd = exec.Command("/usr/bin/chafa", "-s", "35x35", img_file_png)
-	// cmd = exec.Command("/usr/bin/chafa", "-s", "25x25", "--symbols", `[\#]`, "--fg-only", img_file_png)
 
 	cmd.Stdout = os.Stdout
 

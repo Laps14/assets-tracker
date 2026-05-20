@@ -7,9 +7,8 @@ import (
 	"github.com/Laps14/assets-tracker/tty"
 	"github.com/Laps14/assets-tracker/notifications"
 	"os"
+	"os/exec"
 	"strings"
-	"github.com/Laps14/assets-tracker/stocks"
-	"text/template"
 )
 
 var (
@@ -27,7 +26,6 @@ const (
 type Config struct {
 	UserHomeDir string
 	TrackerConfDir string
-	TrackedAssets string
 	TrackedAssetsLogos string
 	ClientConf string
 	AccessToken string
@@ -47,11 +45,35 @@ func InitializeConfig() (*Config, error) {
 	}
 
 	c.TrackerConfDir = c.UserHomeDir + "/.assets-tracker/"
-	// c.TrackedAssets = c.TrackerConfDir + "tracked-assets.conf"
-	c.TrackedAssets = os.TempDir() + "/assets-tracker/"
-	c.TrackedAssetsLogos = c.TrackedAssets + "logos/"
+	c.TrackedAssetsLogos = os.TempDir() + "/assets-tracker/logos/"
 	c.ClientConf = c.TrackerConfDir + "client.conf"
 	c.selectDisplayServer()
+
+	cmd := exec.Command("whoami")
+
+	// Checks for user name to set it as database admin name and password
+	userName, err := cmd.CombinedOutput()
+
+	if err != nil {
+		fmt.Println("Couldn't get your username")
+		panic(1)
+	}
+
+	err = os.Setenv("POSTGRES_USER", strings.TrimSpace(string(userName)))
+
+	if err != nil {
+		fmt.Println("Couldn't get your username")
+		panic(1)
+	}
+
+	os.Setenv("POSTGRES_PASSWORD", strings.TrimSpace(string(userName)))
+
+	if err != nil {
+		fmt.Println("Couldn't get your username")
+		panic(1)
+	}
+
+	c.startDatabaseContainer()
 
 	return c, nil
 }
@@ -72,35 +94,28 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 	}
 	defer tracker_conf_dir.Close()
 
-	tracked_assets, err := os.Open(c.TrackedAssets)
-
-	if err != nil {
-		if os.IsNotExist(err) {
-			os.Mkdir(c.TrackedAssets, os.ModeDir | REGULAR_USER_PERM)
-			tracked_assets, err = os.Open(c.TrackedAssets)
-
-			if err != nil {
-				panic(1)
-			}
-		}
-	}
-	defer tracked_assets.Close()
-
 	tracked_assets_logos, err := os.Open(c.TrackedAssetsLogos)
 
 	if err != nil {
 		if os.IsNotExist(err) {
-			os.Mkdir(c.TrackedAssetsLogos, os.ModeDir | REGULAR_USER_PERM)
+			err = os.MkdirAll(c.TrackedAssetsLogos, os.ModeDir | REGULAR_USER_PERM)
+
+			if err != nil {
+				fmt.Printf("MKDIR\n%v\n", err)
+				panic(1)
+			}
+
 			tracked_assets_logos, err = os.Open(c.TrackedAssetsLogos)
 
 			if err != nil {
+				fmt.Printf("\n%v\n", err)
 				panic(1)
 			}
 		}
 	}
 	defer tracked_assets_logos.Close()
 
-	// Checks if the client.conf file exists. If not, creates it
+	// Checks if the client.conf File exists. If not, creates it
 	// and ask for the user access token to save it and use
 	// for requests later.
 	
@@ -148,10 +163,6 @@ func (c *Config) CheckDirectories(ctx context.Context, term *tty.Tty) {
 }
 
 func (c *Config) askForAccessToken(ctx context.Context, f *os.File, term *tty.Tty) {
-	go func() {
-		<-ctx.Done()
-		term.EnableEcho()
-	}()
 
 	var access_token string
 
@@ -169,8 +180,7 @@ func (c *Config) askForAccessToken(ctx context.Context, f *os.File, term *tty.Tt
 		return
 	}
 
-	config_line := fmt.Sprintf("ACCESS_TOKEN=%s\n", access_token)
-	n, err = f.Write([]byte(config_line))
+	n, err = fmt.Fprintf(f, "ACCESS_TOKEN=%s\n", access_token)
 
 	if err != nil || n == 0 {
 		fmt.Printf("- Não foi possível registrar seu token de acesso. Tente novamente.\n")
@@ -203,33 +213,51 @@ func (c *Config) selectDisplayServer() error {
 	return nil
 }
 
-func (c *Config) NewTrackedAssetTempFile(s *stocks.Stock) error {
-	temp_asset_file_template, err := template.New("temp-asset-file").ParseFiles("./temp_asset_template.template")
-	
-	if err != nil {
-		panic(1)
-	}
+func (c *Config) startDatabaseContainer() error {
 
-	asset_file_path := strings.Join([]string{c.TrackedAssets, s.Title, ".toml"}, "")
-	asset_temp_file, err := os.Create(asset_file_path)
+	fmt.Println("Para a criação/inicialização do Banco de Dados do tracker será necessário que você forneça privilégios de administrador.\n")
+	cmd := exec.Command("sudo", "docker", "image", "ls", "--format", `{{.Repository}}`)
+
+	dockerImages, err := cmd.CombinedOutput()
 
 	if err != nil {
-		return fmt.Errorf("Error ao criar o arquivo temporário da ação %s no diretório %s.", s.Title, c.TrackedAssets)
+		fmt.Printf("\n\n%v\n\n\n\n%v\n\n", dockerImages, err)
+		return err
 	}
 
-	asset_logo_path := strings.Join([]string{c.TrackedAssetsLogos, s.CompanyLogo}, "")
-	// asset_temp_logo, err := os.Create(asset_logo_path)
-	_, err = os.Create(asset_logo_path)
+	if !strings.Contains(string(dockerImages), "assets-tracker-postgres") {
 
-	if err != nil {
-		return fmt.Errorf("Error ao criar o arquivo temporário da ação %s no diretório %s.", s.Title, c.TrackedAssets)
+		pg_user := "POSTGRES_USER=" + os.Getenv("POSTGRES_USER")
+		pg_pwd := "POSTGRES_PASSWORD=" + os.Getenv("POSTGRES_PASSWORD")
+		pg_defaultDB := "POSTGRES_DB=assets_tracker"
+
+		cmd = exec.Command("sudo", "docker", "buildx", "build", "-t","assets-tracker-postgres", "-f", c.UserHomeDir + "/assets-tracker/Dockerfile", `.`)
+
+		err = cmd.Run()
+
+		if err != nil {
+			fmt.Printf("Failed to create the database image: %v\n", err)
+			panic(1)
+		}
+
+		cmd = exec.Command("sudo", "docker", "run", "-d", "-p", "127.0.0.1:1377:5432/tcp", "--name", "assets-tracker-database", "-e", pg_pwd, "-e", pg_user, "-e", pg_defaultDB, "assets-tracker-postgres")
+
+		err = cmd.Run()
+
+		if err != nil {
+			fmt.Printf("Failed to create the database container: %v\n", err)
+			panic(1)
+		}
+	} else {
+		cmd = exec.Command("sudo", "docker", "start", "assets-tracker-database")
+
+		err = cmd.Run()
+
+		if err != nil {
+			panic(1)
+		}
 	}
 
-	err = temp_asset_file_template.Execute(asset_temp_file, *s)
-	
-	if err != nil {
-		panic(1)
-	}
-
+	fmt.Println("Banco de Dados iniciado com sucesso na porta 1377\n")
 	return nil
 }

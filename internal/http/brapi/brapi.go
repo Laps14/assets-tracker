@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"github.com/Laps14/assets-tracker/stocks"
 	"net/http"
-	// "strings"
-	// "time"
-	// "os"
 	"io"
 )
 
@@ -72,7 +69,7 @@ func GetAllStocks(ctx context.Context) <-chan []stocks.Stock {
 
 		for _, v := range jsonBody.Stocks {
 			stockSlice = append(stockSlice, stocks.Stock{Title: v["stock"].(string), Description: v["name"].(string), StockVal: v["close"].(float64),
-			CompanyLogo: v["logo"].(string)})
+			CompanyLogo: v["logo"].(string), TargetVals: []float64{}})
 		}
 
 		stockchan <- stockSlice
@@ -112,6 +109,7 @@ func GetStock(ctx context.Context, stock stocks.Stock) (stocks.Stock, error) {
 		Description: jsonBody.Results[0]["longName"].(string),
 		StockVal: jsonBody.Results[0]["regularMarketPrice"].(float64),
 		CompanyLogo: jsonBody.Results[0]["logourl"].(string),
+		TargetVals: []float64{},
 	}
 
 	return updatedStock, nil
