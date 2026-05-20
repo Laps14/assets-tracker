@@ -10,13 +10,14 @@ type Stock struct {
 	StockVal float64
 	TargetVals []float64
 	CompanyLogo string
-	ID uint64 // Is it necessary?
+	ID int64
 }
 
 func (s *Stock) String() {
 	fmt.Printf("\nINDICADOR: %s\n" +
 		"DESCRIÇÃO: %s\n" +
-		"VALOR COTA: %.2f\n"+
-		"COMPANY LOGO: %s\n",
-		s.Title, s.Description, s.StockVal, s.CompanyLogo)
+		"VALOR COTA: %.2f\n" +
+		"TARGET VALS: %v\n" +
+		"ID: %v\n\n",
+		s.Title, s.Description, s.StockVal, s.TargetVals, s.ID)
 }

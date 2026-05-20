@@ -42,7 +42,7 @@ func NewTtyConfig() (*Tty, error) {
 		return nil, err
 	}
 
-	stdoutTermios, err := unix.IoctlGetTermios(unix.Stdin, unix.TCGETS)
+	stdoutTermios, err := unix.IoctlGetTermios(unix.Stdout, unix.TCGETS)
 
 	if err != nil {
 		return nil, err
